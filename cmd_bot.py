@@ -1,4 +1,5 @@
 import datetime
+from pprint import pprint
 import re
 from typing import Sequence, Union
 import hikari
@@ -21,7 +22,7 @@ async def fetch_sessions(guildId: str):
     messages = await bot.rest.fetch_messages(channel)
     sessions = []
     for message in messages:
-        if message.content.startswith('Session du '):
+        if message.content is not None and message.content.startswith('Session du '):
             sessions.append(SessionTransformer.MessageToSession(message))
     return sessions
 
