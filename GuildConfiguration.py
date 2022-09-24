@@ -22,3 +22,9 @@ async def update_guild_configuration(guild_id: str, channel_organisation: str = 
 
 async def get_config(guild_id: str, force: bool = False):
     return await db_connection.do_find_one({'guild_id': guild_id}, collection_name)
+
+async def delete_config(guild_id: str):
+    await db_connection.do_delete_one({'guild_id': guild_id}, collection_name)
+
+async def get_all_configs():
+    return await db_connection.do_find_all(collection_name)

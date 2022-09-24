@@ -9,7 +9,7 @@ class Session:
     hour:str = None
     tables:list[Table] = None
     extra: str = None
-    def __init__(self, date: str, hour: str, tables: list[Table], message: hikari.Message, extra: str = None) -> None:
+    def __init__(self, date: str, hour: str, tables: list[Table], message: hikari.Message = None, extra: str = None) -> None:
         self.date = date
         self.hour = hour 
         self.tables = tables 

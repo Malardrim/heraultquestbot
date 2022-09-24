@@ -93,7 +93,7 @@ Ajoute une table a une session existante
 ### Suppression d'une table a une session ```Organisateurs```
 Supprime une table d'une session existante
 ```
-/add_table_session
+/remove_table_session
 ```
 ```
     session: date de la session a laquelle il faut s'inscrire, une liste vous est proposée

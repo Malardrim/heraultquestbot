@@ -1,12 +1,14 @@
 import datetime
-from pprint import pprint
+from pprint import pp, pprint
 import re
+from lightbulb.ext import tasks
 from typing import Sequence, Union
 import hikari
 import lightbulb
 from SessionEvent import Session
 import SessionTransformer
 import GuildConfiguration
+import SessionFactory
 from Table import Table
 from decouple import config
 
@@ -14,9 +16,20 @@ bot = lightbulb.BotApp(
     token=config('BOT_TOKEN'),
     help_slash_command=True,
 )
+tasks.load(bot)
 
+doc_link = 'https://github.com/Malardrim/heraultquestbot#commandes'
+doc_message = 'Voici le lien vers les instructions: ' + doc_link
 
-async def fetch_sessions(guildId: str):
+@bot.listen(hikari.GuildJoinEvent)
+async def invite_listener(event: hikari.GuildJoinEvent):
+    for channel in event.channels:
+        if isinstance(channel, hikari.GuildTextChannel):
+            await bot.rest.create_message(channel, 'Merci pour l\'invit voici le lien de comment m\'utiliser :) ' + doc_link)
+            await bot.rest.create_message(channel, 'N\'oubliez pas d\'utiliser la commande `/config` pour me configurer :)')
+            return
+
+async def fetch_sessions(guildId: str, full: bool = False):
     conf = await GuildConfiguration.get_config(guildId)
     channel = conf['channel_organisation']
     messages = await bot.rest.fetch_messages(channel)
@@ -24,7 +37,9 @@ async def fetch_sessions(guildId: str):
     for message in messages:
         if message.content is not None and message.content.startswith('Session du '):
             sessions.append(SessionTransformer.MessageToSession(message))
-    return sessions
+    if full == True:
+        return sessions
+    return sessions[-3:]
 
 
 async def get_session(guild_id: str, name: str) -> Session:
@@ -65,14 +80,15 @@ async def check_channel_organisation(context: lightbulb.Context) -> bool:
 @lightbulb.command("create_session", "Creates a session for some day")
 @lightbulb.implements(lightbulb.SlashCommand)
 async def create_session(ctx: lightbulb.Context) -> None:
-    response = "Session du " + ctx.options.date + \
-        " a partir de " + ctx.options.hour + "\n"
+    tables = 0;
     if ctx.options.tables is not None:
-        for tableNb in range(int(ctx.options.tables)):
-            response += "- Table " + str(tableNb + 1) + ":\n"
-        if ctx.options.complementary is not None:
-            response += '\n***' + ctx.options.complementary + '***'
-    await ctx.respond(response)
+        tables = int(ctx.options.tables)
+    if re.match('[0-9]{2}/[0-9]{2}/[0-9]{4}', ctx.options.date) is None:
+        await ctx.respond("Veuillez respecter le pattern de date\n" + doc_message)
+        return
+    session = SessionFactory.generate_session(ctx.options.date, ctx.options.hour, tables, ctx.options.complementary)
+    await ctx.respond(SessionTransformer.session_to_message(session))
+
 
 
 @create_session.set_error_handler
@@ -85,7 +101,7 @@ async def create_session_error_handler(event: lightbulb.CommandErrorEvent) -> bo
 @lightbulb.add_checks(check_session_is_created)
 @lightbulb.add_checks(check_channel_inscriptions)
 @lightbulb.option("session", "Session to join in", autocomplete=True)
-@lightbulb.option("game_system", "Systeme de jeu", choices=['40k', 'AoS', 'KT', 'Autre'])
+@lightbulb.option("game_system", "Systeme de jeu", choices=['40k', 'AoS', 'KT', 'Infinity', 'Autre'])
 @lightbulb.option("game_type", "Type de jeu", choices=['1v1', '2v2', 'FFA', 'Autre'])
 @lightbulb.option("game_size", "Taille de la partie")
 @lightbulb.option("participants", "Participants")
@@ -115,7 +131,7 @@ async def inscription(ctx: lightbulb.Context) -> None:
 
 @inscription.set_error_handler
 async def inscription_error_handler(event: lightbulb.CommandErrorEvent) -> bool:
-    await event.context.respond("La session n'existe pas veuillez en choisir une valide")
+    await event.context.respond("La session n'existe pas veuillez en choisir une valide " + doc_message)
     return True
 
 
@@ -163,7 +179,7 @@ async def add_table_session(ctx: lightbulb.Context) -> None:
 
 @add_table_session.set_error_handler
 async def add_table_session_error_handler(event: lightbulb.CommandErrorEvent) -> bool:
-    await event.context.respond("La session n'existe pas veuillez en choisir une valide")
+    await event.context.respond("La session n'existe pas veuillez en choisir une valide " + doc_message)
     return True
 
 
@@ -192,7 +208,7 @@ async def remove_table_session(ctx: lightbulb.Context) -> None:
 
 @remove_table_session.set_error_handler
 async def remove_table_session_error_handler(event: lightbulb.CommandErrorEvent) -> bool:
-    await event.context.respond("La session n'existe pas veuillez en choisir une valide")
+    await event.context.respond("La session n'existe pas veuillez en choisir une valide " + doc_message)
     return True
 
 
@@ -226,5 +242,29 @@ async def unsuscribe_session(ctx: lightbulb.Context) -> None:
 async def unsuscribe_session_autocomplete(opt: hikari.AutocompleteInteractionOption, inter: hikari.AutocompleteInteraction
                                           ) -> Union[str, Sequence[str], hikari.CommandChoice, Sequence[hikari.CommandChoice]]:
     return await session_autocomplete(opt, inter)
+
+@tasks.task(h=6, auto_start=True)
+async def new_session_task():
+    await generate_next_sessions()
+
+async def generate_next_session_for_guild(guild_config: any, next_session: str):
+    try:
+        session = await get_session(guild_config['guild_id'], next_session)
+        if session is None:
+            time_now = (datetime.datetime.now()).strftime("%d/%m/%Y à %H:%M:%S")
+            session = SessionFactory.generate_session(next_session, '19h', 8, 'Session générée en auto par le bot le: ' + time_now)
+            session = SessionTransformer.session_to_message(session)
+            await bot.rest.create_message(guild_config['channel_organisation'], session)
+    except hikari.errors.ForbiddenError as forbidden:
+        await GuildConfiguration.delete_config(guild_config['guild_id'])
+        print('Guild deleted from bdd', forbidden)
+    except:
+        print('An unknown error occurred')
+
+async def generate_next_sessions():
+    next_session_date = (datetime.date.today() + datetime.timedelta( (4-datetime.date.today().weekday()) % 7 )).strftime("%d/%m/%Y")
+    configs = await GuildConfiguration.get_all_configs()
+    for config in configs:
+        await generate_next_session_for_guild(config, next_session_date)
 
 bot.run()
